@@ -73,7 +73,7 @@ jobs:
       matrix:
         include:
           - name: base
-            ref: b8fa4fe
+            ref: b8fa4fe99f0ff796613cdf4c73610b7e6cf8322c
           - name: fix
             ref: fix/1047-plugin-update-exit-code
     steps:
