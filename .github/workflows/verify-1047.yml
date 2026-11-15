@@ -129,3 +129,31 @@ jobs:
           echo "== stderr:"; cat err.txt
           echo "== lock rev for good: $(grep -o "$good_new" "$cfg/plugins.lock" >/dev/null && echo updated to new rev || echo NOT updated)"
           echo "== 'update failed' on stdout: $(grep -c 'update failed' out.txt)  on stderr: $(grep -c 'update failed' err.txt)"
+
+  signing:
+    name: Tests with global commit signing on (${{ matrix.name }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: helper before
+            ref: a071fd935e71a85cbb9eeb5e59b6c36001126ac2
+          - name: helper after
+            ref: fix/1047-plugin-update-exit-code
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ matrix.ref }}
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y -qq pkg-config libssl-dev libxcb1-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libpipewire-0.3-dev libspa-0.2-dev libasound2-dev
+      - uses: Swatinem/rust-cache@v2
+      - name: cargo test plugin_update with commit.gpgSign=true and no key
+        run: |
+          git config --global commit.gpgSign true
+          git config --global user.signingkey DEADBEEFDEADBEEF
+          if cargo test --locked plugin_update 2>&1 | tee out.log; then echo "RESULT: pass"; else echo "RESULT: fail"; fi
+          grep -E "^test |test result" out.log || true
