@@ -1,0 +1,34 @@
+diff --git a/src/cli/plugin.rs b/src/cli/plugin.rs
+index c8c8e73..d07eb20 100644
+--- a/src/cli/plugin.rs
++++ b/src/cli/plugin.rs
+@@ -250,7 +250,6 @@ fn update_plugins(config_dir: &Path, name: Option<&String>) -> Result<()> {
+   }
+ 
+   let mut changed = false;
+-  let mut failed = 0;
+   for target in targets {
+     let dir = plugins_dir.join(&target.name);
+     if !dir.is_dir() {
+@@ -282,20 +281,13 @@ fn update_plugins(config_dir: &Path, name: Option<&String>) -> Result<()> {
+           );
+         }
+       }
+-      Err(e) => {
+-        eprintln!("  {}: update failed: {e}", target.name);
+-        failed += 1;
+-      }
++      Err(e) => println!("  {}: update failed: {e}", target.name),
+     }
+   }
+ 
+-  // Record the plugins that did update even when others failed.
+   if changed {
+     save_lock(&lock_path, &lock)?;
+   }
+-  if failed > 0 {
+-    bail!("{failed} plugin(s) failed to update");
+-  }
+   Ok(())
+ }
+ 

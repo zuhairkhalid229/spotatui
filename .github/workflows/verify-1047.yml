@@ -1,0 +1,131 @@
+name: verify-1047
+
+on:
+  push:
+    branches: [ci/verify-1047]
+
+permissions:
+  contents: read
+
+env:
+  RUSTFLAGS: "-C linker-features=-lld"
+  FIX: fix/1047-plugin-update-exit-code
+  BASE: b8fa4fe
+
+jobs:
+  fails-first:
+    name: New tests on the base code (must fail)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y -qq pkg-config libssl-dev libxcb1-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libpipewire-0.3-dev libspa-0.2-dev libasound2-dev
+      - uses: Swatinem/rust-cache@v2
+      - name: Put back the old update_plugins, keep the new tests
+        run: git apply .github/verify-1047/revert-code-only.patch && git diff --stat
+      - name: cargo test plugin_update (expected to fail)
+        run: |
+          if cargo test --locked plugin_update 2>&1 | tee out.log; then status=0; else status=1; fi
+          grep -E "^test |test result|panicked" out.log || true
+          if [ "$(grep -c '^test .* FAILED' out.log)" = "0" ]; then echo "UNEXPECTED: no test failed on the base code"; exit 1; fi
+          echo "new tests fail on the base code, as expected"
+
+  checks:
+    name: Done-when checks (fix)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/1047-plugin-update-exit-code
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y -qq pkg-config libssl-dev libxcb1-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libpipewire-0.3-dev libspa-0.2-dev libasound2-dev
+      - uses: Swatinem/rust-cache@v2
+      - name: cargo test plugin_update (default build)
+        run: cargo test --locked plugin_update 2>&1 | tee plugin_update.log
+      - name: cargo fmt --all -- --check
+        run: cargo fmt --all -- --check
+      - name: cargo clippy (default) -D warnings
+        run: cargo clippy --locked -- -D warnings
+      - name: cargo clippy (slim) -D warnings
+        run: cargo clippy --locked --no-default-features --features telemetry,tui -- -D warnings
+      - name: cargo test (slim)
+        run: cargo test --locked --no-default-features --features telemetry,tui 2>&1 | tail -40
+      - name: cargo test (default, full suite)
+        run: cargo test --locked 2>&1 | grep -E "^test result|FAILED|panicked" | tail -40
+      - name: tools/gates.count unchanged vs base
+        run: |
+          git fetch --depth 50 origin main
+          git diff --exit-code "$BASE" -- tools/gates.count && echo "gates.count unchanged"
+
+  repro:
+    name: Real repro (${{ matrix.name }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: base
+            ref: b8fa4fe
+          - name: fix
+            ref: fix/1047-plugin-update-exit-code
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ matrix.ref }}
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y -qq pkg-config libssl-dev libxcb1-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libpipewire-0.3-dev libspa-0.2-dev libasound2-dev
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --locked
+      - name: Two plugins, one with a broken remote, then `spotatui plugin update`
+        run: |
+          set -u
+          git config --global user.email ci@example.invalid
+          git config --global user.name ci
+          git config --global init.defaultBranch main
+          export XDG_CONFIG_HOME="$RUNNER_TEMP/cfg"
+          cfg="$XDG_CONFIG_HOME/spotatui"
+          mkdir -p "$cfg/plugins"
+
+          # "good": a local origin that gets a new commit after install.
+          origin="$RUNNER_TEMP/good-origin"
+          git init -q "$origin"
+          echo 'return {}' > "$origin/init.lua"
+          git -C "$origin" add . && git -C "$origin" commit -qm one
+          git clone -q "file://$origin" "$cfg/plugins/good"
+          good_old=$(git -C "$cfg/plugins/good" rev-parse HEAD)
+          echo '-- two' >> "$origin/init.lua"
+          git -C "$origin" commit -qam two
+          good_new=$(git -C "$origin" rev-parse HEAD)
+
+          # "broken": installed, then its remote stops existing.
+          cp -r "$cfg/plugins/good" "$cfg/plugins/broken"
+          git -C "$cfg/plugins/broken" remote set-url origin https://example.invalid/nope.git
+          broken_rev=$(git -C "$cfg/plugins/broken" rev-parse HEAD)
+
+          cat > "$cfg/plugins.lock" <<EOF
+          {"version":1,"plugins":[
+            {"name":"good","repo":"demo/good","url":"file://$origin","rev":"$good_old"},
+            {"name":"broken","repo":"demo/broken","url":"https://example.invalid/nope.git","rev":"$broken_rev"}
+          ]}
+          EOF
+
+          set +e
+          ./target/debug/spotatui plugin update >out.txt 2>err.txt
+          code=$?
+          set -e
+          echo "== exit code: $code"
+          echo "== stdout:"; cat out.txt
+          echo "== stderr:"; cat err.txt
+          echo "== lock rev for good: $(grep -o "$good_new" "$cfg/plugins.lock" >/dev/null && echo updated to new rev || echo NOT updated)"
+          echo "== 'update failed' on stdout: $(grep -c 'update failed' out.txt)  on stderr: $(grep -c 'update failed' err.txt)"
