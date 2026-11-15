@@ -157,3 +157,38 @@ jobs:
           git config --global user.signingkey DEADBEEFDEADBEEF
           if cargo test --locked plugin_update 2>&1 | tee out.log; then echo "RESULT: pass"; else echo "RESULT: fail"; fi
           grep -E "^test |test result" out.log || true
+
+  hook-env:
+    name: Tests run as if inside a git hook (${{ matrix.name }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: before guard
+            ref: 5c454abc51db49047ef7c5b9b6b85d72f44a126e
+          - name: after guard
+            ref: fix/1047-plugin-update-exit-code
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ matrix.ref }}
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y -qq pkg-config libssl-dev libxcb1-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libpipewire-0.3-dev libspa-0.2-dev libasound2-dev
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --locked plugin_update --no-run
+      - name: A caller repo with unsaved work, then the tests with its GIT_DIR and GIT_WORK_TREE
+        run: |
+          git config --global user.email ci@example.invalid
+          git config --global user.name ci
+          up="$RUNNER_TEMP/up"; caller="$RUNNER_TEMP/caller"
+          git init -q "$up"; echo upstream > "$up/f"; git -C "$up" add f; git -C "$up" commit -qm up
+          echo upstream-two > "$up/f"; git clone -q "$up" "$caller"; git -C "$up" commit -qam two
+          echo "my unsaved work" > "$caller/f"
+          if GIT_DIR="$caller/.git" GIT_WORK_TREE="$caller" cargo test --locked plugin_update > out.log 2>&1; then echo "TESTS: pass"; else echo "TESTS: fail"; fi
+          grep -E "^test |test result|unset|panicked" out.log || true
+          echo "== caller's f now: $(cat "$caller/f")"
+          echo "== caller's HEAD: $(git -C "$caller" log --oneline -1)"
