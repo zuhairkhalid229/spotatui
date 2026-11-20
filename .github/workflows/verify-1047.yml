@@ -192,3 +192,33 @@ jobs:
           grep -E "^test |test result|unset|panicked" out.log || true
           echo "== caller's f now: $(cat "$caller/f")"
           echo "== caller's HEAD: $(git -C "$caller" log --oneline -1)"
+
+  global-hook:
+    name: Tests with a global commit-msg hook that rejects every commit (${{ matrix.name }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: before
+            ref: e0c562d
+          - name: after
+            ref: 1f85a49a72b168a622f7bdffbf7224ac8a2cb37e
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ matrix.ref }}
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y -qq pkg-config libssl-dev libxcb1-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libpipewire-0.3-dev libspa-0.2-dev libasound2-dev
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --locked plugin_update --no-run
+      - name: cargo test plugin_update with the global hook
+        run: |
+          hooks="$RUNNER_TEMP/global-hooks"; mkdir -p "$hooks"
+          printf '#!/bin/sh\necho "rejected by global commit-msg hook" >&2\nexit 1\n' > "$hooks/commit-msg"; chmod +x "$hooks/commit-msg"
+          git config --global core.hooksPath "$hooks"
+          if cargo test --locked plugin_update 2>&1 | tee out.log; then echo "RESULT: pass"; else echo "RESULT: fail"; fi
+          grep -E "^test |test result|panicked" out.log || true
